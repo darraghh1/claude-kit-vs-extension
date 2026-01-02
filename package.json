@@ -1,0 +1,180 @@
+{
+  "name": "claude-kit-vs-extension",
+  "displayName": "ClaudeKit Plans",
+  "description": "View ClaudeKit plan progress in VS Code",
+  "version": "0.1.6",
+  "publisher": "digitalmastery",
+  "icon": "resources/icon-128.png",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "claudekit",
+    "plans",
+    "progress",
+    "agile",
+    "treeview"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/darraghh1/claude-kit-vs-extension"
+  },
+  "bugs": {
+    "url": "https://github.com/darraghh1/claude-kit-vs-extension/issues"
+  },
+  "homepage": "https://github.com/darraghh1/claude-kit-vs-extension#readme",
+  "activationEvents": [
+    "workspaceContains:**/plans/*/plan.md"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "views": {
+      "explorer": [
+        {
+          "id": "claudekitPlansView",
+          "name": "ClaudeKit Plans",
+          "icon": "resources/plan-icon.svg",
+          "contextualTitle": "ClaudeKit Plans"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "claudekit.refresh",
+        "title": "Refresh Plans",
+        "category": "ClaudeKit",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "claudekit.openPlan",
+        "title": "Open Plan",
+        "category": "ClaudeKit",
+        "icon": "$(file)"
+      },
+      {
+        "command": "claudekit.openPhase",
+        "title": "Open Phase",
+        "category": "ClaudeKit",
+        "icon": "$(file)"
+      },
+      {
+        "command": "claudekit.openCurrentPlan",
+        "title": "Open Current Plan",
+        "category": "ClaudeKit",
+        "icon": "$(file)"
+      },
+      {
+        "command": "claudekit.diagnose",
+        "title": "Show Diagnostics",
+        "category": "ClaudeKit",
+        "icon": "$(info)"
+      },
+      {
+        "command": "claudekit.filter",
+        "title": "Filter Plans",
+        "category": "ClaudeKit",
+        "icon": "$(filter)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "claudekit.filter",
+          "when": "view == claudekitPlansView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "claudekit.refresh",
+          "when": "view == claudekitPlansView",
+          "group": "navigation@2"
+        },
+        {
+          "command": "claudekit.diagnose",
+          "when": "view == claudekitPlansView",
+          "group": "navigation@3"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "claudekit.openPlan",
+          "when": "view == claudekitPlansView && viewItem == plan",
+          "group": "navigation"
+        },
+        {
+          "command": "claudekit.openPhase",
+          "when": "view == claudekitPlansView && viewItem == phase",
+          "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "claudekit.refresh",
+          "when": "workspaceFolderCount > 0"
+        },
+        {
+          "command": "claudekit.diagnose",
+          "when": "workspaceFolderCount > 0"
+        },
+        {
+          "command": "claudekit.filter",
+          "when": "workspaceFolderCount > 0"
+        },
+        {
+          "command": "claudekit.openPlan",
+          "when": "false"
+        },
+        {
+          "command": "claudekit.openPhase",
+          "when": "false"
+        },
+        {
+          "command": "claudekit.openCurrentPlan",
+          "when": "workspaceFolderCount > 0"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "ClaudeKit Plans",
+      "properties": {
+        "claudekit.plansPath": {
+          "type": "string",
+          "default": "./plans",
+          "description": "Path to plans directory"
+        },
+        "claudekit.showStatusBar": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show status bar item"
+        },
+        "claudekit.autoRefresh": {
+          "type": "boolean",
+          "default": true,
+          "description": "Auto-refresh when plan files change"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "node esbuild.js --production",
+    "compile": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "lint": "eslint src --ext ts",
+    "test": "mocha --require ts-node/register 'src/**/*.test.ts'",
+    "test:unit": "mocha --require ts-node/register 'src/**/*.test.ts'"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.6",
+    "@types/node": "^18.0.0",
+    "@types/vscode": "^1.85.0",
+    "esbuild": "^0.19.0",
+    "mocha": "^10.0.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.0"
+  },
+  "dependencies": {
+    "gray-matter": "^4.0.3"
+  }
+}
