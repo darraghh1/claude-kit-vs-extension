@@ -22,6 +22,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { PhaseData, PhaseStatus } from '../types';
 import { normalizeStatus } from './statusUtils';
+import { extractPhaseMetadata } from './phaseMetadataExtractor';
 
 /**
  * Keywords that indicate a valid status value.
@@ -115,31 +116,91 @@ export async function parsePlanTable(planFilePath: string): Promise<PhaseData[]>
   // Format 1: Multi-column markdown table with Status column
   // This is the most common format: | # | Phase | Status | Link |
   phases = parseMultiColumnTable(content, dir, planFilePath);
-  if (phases.length > 0) return phases;
+  if (phases.length > 0) {
+    return enrichPhasesWithFileMetadata(phases);
+  }
 
   // Format 2: Link-first table style
   // | [Phase 1](./phase-01.md) | Description | Status |
   phases = parseLinkFirstTable(content, dir);
-  if (phases.length > 0) return phases;
+  if (phases.length > 0) {
+    return enrichPhasesWithFileMetadata(phases);
+  }
 
   // Format 3: Numbered markdown list with inline status
   // 1. **Database Schema** - ✅ COMPLETE
   phases = parseNumberedListWithStatus(content, planFilePath);
-  if (phases.length > 0) return phases;
+  if (phases.length > 0) {
+    return enrichPhasesWithFileMetadata(phases);
+  }
 
   // Format 4: Heading-based with status on separate line
   // ### Phase 1: Setup
   // - Status: Completed
   phases = parseHeadingBased(content, planFilePath);
-  if (phases.length > 0) return phases;
+  if (phases.length > 0) {
+    return enrichPhasesWithFileMetadata(phases);
+  }
 
   // Format 5: Checkbox list (GitHub task list style)
   // - [x] **[Phase 1: Setup](./phase-01.md)**
   phases = parseCheckboxList(content, dir, planFilePath);
-  if (phases.length > 0) return phases;
+  if (phases.length > 0) {
+    return enrichPhasesWithFileMetadata(phases);
+  }
 
   // No format matched - return empty array
   return phases;
+}
+
+/**
+ * Enrich phases with metadata from their linked phase files.
+ *
+ * When a phase links to a separate file (e.g., phase-01-setup.md),
+ * we read that file and extract its Implementation Status. This
+ * provides an authoritative status that overrides the plan.md table.
+ *
+ * WHY THIS MATTERS:
+ * The phase file contains detailed implementation info. Its status
+ * is the "source of truth" - the plan.md table is just a summary.
+ *
+ * @param phases - Phases parsed from plan.md
+ * @returns Phases with updated status from their linked files
+ */
+async function enrichPhasesWithFileMetadata(
+  phases: PhaseData[]
+): Promise<PhaseData[]> {
+  // Process all phases in parallel for performance
+  const enrichedPhases = await Promise.all(
+    phases.map(async (phase) => {
+      // Only check files that look like phase files (not plan.md itself)
+      if (!phase.file || !phase.file.includes('phase-')) {
+        return phase;
+      }
+
+      try {
+        // Extract metadata from the phase file
+        const metadata = await extractPhaseMetadata(phase.file);
+
+        if (metadata) {
+          // Phase file has metadata - use its status as authoritative
+          return {
+            ...phase,
+            status: metadata.status,
+            // Optionally update effort if present in phase file
+            effort: metadata.effort || phase.effort,
+          };
+        }
+      } catch {
+        // File read failed - keep original status from plan.md
+        // This is not an error - phase files may not exist yet
+      }
+
+      return phase;
+    })
+  );
+
+  return enrichedPhases;
 }
 
 /**
@@ -154,8 +215,9 @@ export async function parsePlanTable(planFilePath: string): Promise<PhaseData[]>
  * - | Phase | Name | Status | [Link](path) |
  * - | Phase Name | Status |
  *
- * The parser first finds the header row to determine column positions,
- * then iterates through data rows extracting phase information.
+ * The parser scans ALL tables in the file looking for one that has both
+ * a Status column AND a Phase-related column. This prevents parsing
+ * non-phase tables like "Gap Analysis" that happen to have Status columns.
  *
  * @param content - Full markdown file content
  * @param dir - Directory containing the plan.md (for resolving links)
@@ -167,91 +229,122 @@ function parseMultiColumnTable(
   dir: string,
   planFilePath: string
 ): PhaseData[] {
-  const phases: PhaseData[] = [];
   const lines = content.split('\n');
 
+  // Scan through ALL tables, not just the first one with Status column
+  // This is needed because plans may have non-phase tables (like "Gap Analysis")
+  // that also have a Status column but shouldn't be parsed as phases
+  let scanStartLine = 0;
+
+  while (scanStartLine < lines.length) {
+    const result = parseTableStartingFrom(lines, scanStartLine, dir, planFilePath);
+
+    if (result.phases.length > 0) {
+      // Found a valid phase table
+      return result.phases;
+    }
+
+    if (result.nextScanLine <= scanStartLine) {
+      // No more tables found
+      break;
+    }
+
+    // Continue scanning from after this table
+    scanStartLine = result.nextScanLine;
+  }
+
+  return [];
+}
+
+/**
+ * Parse a single table starting from a given line.
+ *
+ * @returns Object with phases array and next line to scan from
+ */
+function parseTableStartingFrom(
+  lines: string[],
+  startLine: number,
+  dir: string,
+  planFilePath: string
+): { phases: PhaseData[]; nextScanLine: number } {
+  const phases: PhaseData[] = [];
+
   // === Column index tracking ===
-  // These will be set when we find the header row
-  // -1 means "column not found"
-  let headerIndex = -1;     // Line number of the header row
-  let statusColIndex = -1;  // Column index for Status
-  let phaseColIndex = -1;   // Column index for Phase number
-  let nameColIndex = -1;    // Column index for Name/Title
-  let descColIndex = -1;    // Column index for Description
-  let linkColIndex = -1;    // Column index for Link/File
+  let headerIndex = -1;
+  let statusColIndex = -1;
+  let phaseColIndex = -1;
+  let nameColIndex = -1;
+  let descColIndex = -1;
+  let linkColIndex = -1;
 
   // === Step 1: Find the header row ===
-  // Scan through lines looking for a row that contains a "Status" column header
-  for (let i = 0; i < lines.length; i++) {
+  for (let i = startLine; i < lines.length; i++) {
     const line = lines[i];
 
-    // Skip lines without pipe characters (not a table row)
     if (!line.includes('|')) continue;
 
-    // Split the line into columns
-    // "| A | B | C |" → ["", " A ", " B ", " C ", ""] → ["a", "b", "c"]
     const cols = line
       .split('|')
       .map((c) => c.trim().toLowerCase())
-      .filter((c) => c);  // Remove empty strings from start/end pipes
+      .filter((c) => c);
 
-    // Look for a column named "status" or containing "status"
     const statusIdx = cols.findIndex(
       (c) => c === 'status' || c.includes('status')
     );
 
-    // Found the Status column header - this is our header row
     if (statusIdx !== -1) {
       headerIndex = i;
       statusColIndex = statusIdx;
 
-      // === Identify other column positions ===
-
-      // Look for number column (# or Order)
       const numberColIndex = cols.findIndex((c) => c === '#' || c === 'order');
-
-      // Look for Phase/Phase Name column
       const phaseNameColIndex = cols.findIndex((c) => c === 'phase' || c === 'phase name');
 
-      // Determine how to use these columns for phase number vs name
-      // If we have both # and Phase columns, # is for number, Phase is for name
-      // Otherwise, the Phase column serves both purposes
       if (numberColIndex !== -1 && phaseNameColIndex !== -1) {
-        phaseColIndex = numberColIndex;   // Use # for phase number
-        nameColIndex = phaseNameColIndex; // Use Phase for name
+        phaseColIndex = numberColIndex;
+        nameColIndex = phaseNameColIndex;
       } else if (phaseNameColIndex !== -1) {
         phaseColIndex = phaseNameColIndex;
       } else {
         phaseColIndex = numberColIndex;
       }
 
-      // Look for explicit Name/Title column (if not already set)
       if (nameColIndex === -1) {
         nameColIndex = cols.findIndex(
           (c) => c === 'name' || c === 'title' || c === 'phase name'
         );
       }
 
-      // Look for Description column
       descColIndex = cols.findIndex(
         (c) => c === 'description' || c === 'desc'
       );
 
-      // Look for Link/File column
       linkColIndex = cols.findIndex((c) => c === 'link' || c === 'file');
-
-      // Stop scanning - we found our header
       break;
     }
   }
 
-  // No Status column found - this format doesn't match
-  if (headerIndex === -1 || statusColIndex === -1) return [];
+  // No Status column found
+  if (headerIndex === -1 || statusColIndex === -1) {
+    return { phases: [], nextScanLine: lines.length };
+  }
+
+  // Skip tables without a Phase-related column - they're probably not phase tables
+  // This prevents parsing things like "Gap Analysis" tables that have Status columns
+  if (phaseColIndex === -1 && nameColIndex === -1 && descColIndex === -1) {
+    // Return the line AFTER this table so we can continue scanning
+    let nextLine = headerIndex + 1;
+    while (nextLine < lines.length && lines[nextLine].includes('|')) {
+      nextLine++;
+    }
+    return { phases: [], nextScanLine: nextLine };
+  }
 
   // === Step 2: Parse data rows ===
   // Start from the line after the header and process until we hit a non-table line
+  let tableEndLine = headerIndex + 1;
   for (let i = headerIndex + 1; i < lines.length; i++) {
     const line = lines[i];
+    tableEndLine = i + 1;
 
     // End of table - no more pipe characters
     if (!line.includes('|')) break;
@@ -349,7 +442,7 @@ function parseMultiColumnTable(
     });
   }
 
-  return phases;
+  return { phases, nextScanLine: tableEndLine };
 }
 
 /**

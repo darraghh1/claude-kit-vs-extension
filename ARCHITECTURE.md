@@ -61,6 +61,7 @@ src/
 ├── planProject.ts        # Per-workspace state management
 └── parser/
     ├── planParser.ts     # Extracts phases from plan.md
+    ├── phaseMetadataExtractor.ts  # Extracts status from phase files (authoritative)
     ├── metadataExtractor.ts  # Extracts frontmatter and metadata
     ├── planScanner.ts    # Discovers plan.md files
     └── statusUtils.ts    # Status normalization helpers
@@ -104,6 +105,14 @@ src/
 │  planParser.parsePlanTable()                                     │
 │  - Tries each format parser in order                             │
 │  - Returns first successful parse (PhaseData[])                  │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  planParser.enrichPhasesWithFileMetadata()                       │
+│  - Reads each phase-XX-*.md file                                 │
+│  - Extracts status from phase file (authoritative source)        │
+│  - Overrides plan.md status with phase file status               │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
@@ -175,6 +184,33 @@ The heart of the extension. Supports 5 different markdown table formats:
 | Numbered list | `1. **Name** - ✅ COMPLETE` |
 | Heading-based | `### Phase 1: Name` with `- Status: ...` |
 | Checkbox | `- [x] **[Phase 1](path)**` |
+
+#### phaseMetadataExtractor.ts
+Extracts status from individual phase files. **Phase file status is authoritative** - it overrides any status from plan.md tables.
+
+Supports 3 formats in priority order:
+
+| Format | Example |
+|--------|---------|
+| Overview table | `\| Implementation Status \| ✅ Complete \|` |
+| Inline metadata | `**Status**: Complete` |
+| YAML frontmatter | `status: completed` |
+
+**Overview Table Format (from /plan:hard command):**
+```markdown
+## Overview
+
+| Field | Value |
+|-------|-------|
+| Implementation Status | ✅ Complete |
+| Review Status | Approved |
+| Effort | 2h |
+```
+
+**Inline Metadata Format (legacy):**
+```markdown
+**Effort**: 2h | **Priority**: P1 | **Status**: Complete
+```
 
 #### metadataExtractor.ts
 Extracts rich metadata from:
@@ -292,6 +328,23 @@ function parseMyNewFormat(content: string, dir: string): PhaseData[] {
    - Add to `extractFromFrontmatter()`
    - Add to `extractFromHeader()` if needed
 3. Use it in `treeProvider.ts` or `statusBar.ts`
+
+### Adding a New Phase File Format
+
+To support a new format in individual phase files:
+
+1. Add a new extraction function in `phaseMetadataExtractor.ts`:
+```typescript
+function extractFromMyFormat(content: string): PhaseFileMetadata | null {
+  // Your extraction logic here
+  return { status: normalizeStatus(foundStatus) };
+}
+```
+
+2. Call it from `extractPhaseMetadata()` in the priority order
+3. Add test fixtures in `phaseMetadataExtractor.test.ts`
+
+**Important**: Phase file status is authoritative. When a phase file has a valid status, it overrides whatever status was parsed from the plan.md table.
 
 ### Adding a New Command
 
